@@ -541,7 +541,7 @@ func (f *Fnt) drawChar(
 	}
 
 	spr := f.getCharSpr(c, bank, bt)
-	if spr == nil || spr.Tex == nil {
+	if spr == nil || (spr.Tex == nil && spr.lazy == nil) {
 		return 0
 	}
 
@@ -581,7 +581,7 @@ func (f *Fnt) drawChar(
 	}
 
 	// Update only the render parameters that change between each character
-	rp.tex = spr.Tex
+	rp.tex = spr.GetTex()
 	if spr.coldepth <= 8 {
 		rp.paltex = f.paltex
 	} else {

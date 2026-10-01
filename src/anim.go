@@ -1019,7 +1019,7 @@ func (a *Animation) Draw(window *[4]int32, x, y, xcs, ycs, xs, xbs, ys,
 	}
 
 	rp := RenderParams{
-		tex:            a.spr.Tex,
+		tex:            a.spr.GetTex(),
 		paltex:         paltex,
 		size:           a.spr.Size,
 		x:              x * sys.widthScale,
@@ -1071,7 +1071,7 @@ func (a *Animation) ShadowDraw(window *[4]int32, x, y, xscl, yscl, vscl, rxadd f
 	y += yoff
 
 	rp := RenderParams{
-		tex:            a.spr.Tex,
+		tex:            a.spr.GetTex(),
 		paltex:         nil,
 		size:           a.spr.Size,
 		x:              Abs(xscl*h) * float32(a.spr.Offset[0]) * sys.widthScale,
@@ -2143,6 +2143,7 @@ func (a *Anim) Copy() *Anim {
 		dst := newSprite()
 
 		dst.Tex = src.Tex
+		dst.lazy = src.lazy
 		dst.palidx = src.palidx
 		dst.coldepth = src.coldepth
 		// Copy arrays (if not slices, this is fine as-is)

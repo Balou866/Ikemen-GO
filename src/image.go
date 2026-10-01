@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -672,10 +673,11 @@ type Sprite struct {
 	paltemp      []uint32
 	PalTex       Texture
 	sffv1BasePal bool // SFFv1 sprite palette duplicates the base palette
+	lazy         *lazySpriteData
 }
 
 func (s *Sprite) isBlank() bool {
-	return s.Tex == nil || s.Size[0] == 0 || s.Size[1] == 0
+	return (s.Tex == nil && s.lazy == nil) || s.Size[0] == 0 || s.Size[1] == 0
 }
 
 func newSprite() *Sprite {
@@ -818,6 +820,7 @@ func (s *Sprite) shareCopy(src *Sprite) {
 		s.palidx = src.palidx
 	}
 	s.coldepth = src.coldepth
+	s.lazy = src.lazy
 
 	// We must defer copying the texture during the main thread
 	// Otherwise we can end up copying a nil texture over the good one or other race condition bugs
@@ -876,6 +879,30 @@ func (s *Sprite) SetPxl(px []byte) {
 		s.Tex = gfx.newTexture(int32(s.Size[0]), int32(s.Size[1]), 8, false)
 		s.Tex.SetData(px)
 	}
+}
+
+// Main thread versions of SetPxl / SetRaw, used by lazy sprite decoding
+func (s *Sprite) setPxlNow(px []byte) {
+	if len(px) == 0 || int64(len(px)) != int64(s.Size[0])*int64(s.Size[1]) {
+		return
+	}
+	s.Tex = gfx.newTexture(int32(s.Size[0]), int32(s.Size[1]), 8, false)
+	s.Tex.SetData(px)
+}
+
+func (s *Sprite) setRawNow(data []byte, sprWidth int32, sprHeight int32, sprDepth int32) {
+	if sprDepth == 32 {
+		// Normalize fully transparent RGBA pixels to prevent their RGB values from bleeding into visible pixels
+		for i := 0; i+3 < len(data); i += 4 {
+			if data[i+3] == 0 {
+				data[i] = 0
+				data[i+1] = 0
+				data[i+2] = 0
+			}
+		}
+	}
+	s.Tex = gfx.newTexture(sprWidth, sprHeight, sprDepth, sys.cfg.Video.RGBSpriteBilinearFilter)
+	s.Tex.SetData(data)
 }
 
 func (s *Sprite) SetRaw(data []byte, sprWidth int32, sprHeight int32, sprDepth int32) {
@@ -1309,14 +1336,65 @@ func (s *Sprite) Lz5Decode(rle []byte) (p []byte) {
 	return
 }
 
+// Compressed SFFv2 sprite data kept in RAM until the sprite is first drawn.
+// Shared between sprite copies so the texture is only created once.
+type lazySpriteData struct {
+	data []byte
+	tex  Texture
+}
+
+// Reads the compressed sprite data only. Decoding and texture upload are
+// deferred to the first draw (GetTex), so sprites that are never shown
+// (unused effects, menus, portraits...) never use GPU memory.
 func (s *Sprite) readV2(f io.ReadSeeker, offset int64, datasize uint32) error {
+	if s.rle > 0 {
+		return nil
+	}
+	if s.rle != 0 && datasize < 4 {
+		datasize = 4
+	}
+	// Whole block (including the 4-byte header of compressed formats), decoded as-is by decodeV2
+	data := make([]byte, datasize)
+	if _, err := f.Seek(offset, 0); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(f, data); err != nil {
+		return err
+	}
+	if s.rle == 0 && s.coldepth != 8 && s.coldepth != 24 && s.coldepth != 32 {
+		return Error("Unknown color depth")
+	}
+	switch -s.rle {
+	case 0, 2, 3, 4, 10, 11, 12:
+	default:
+		return Error("Unknown format")
+	}
+	s.lazy = &lazySpriteData{data: data}
+	return nil
+}
+
+// Returns the sprite texture, decoding and uploading it on first use.
+// Must be called from the main thread.
+func (s *Sprite) GetTex() Texture {
+	if s.Tex == nil && s.lazy != nil {
+		if s.lazy.tex == nil && s.lazy.data != nil {
+			data := s.lazy.data
+			s.lazy.data = nil
+			if err := s.decodeV2(bytes.NewReader(data), 0, uint32(len(data))); err != nil {
+				LogMessage("Failed to decode sprite %v,%v: %v", s.Group, s.Number, err)
+			}
+			s.lazy.tex = s.Tex
+		}
+		s.Tex = s.lazy.tex
+	}
+	return s.Tex
+}
+
+func (s *Sprite) decodeV2(f io.ReadSeeker, offset int64, datasize uint32) error {
 	var px []byte
 	var isRaw bool = false
 
-	if s.rle > 0 {
-		return nil
-
-	} else if s.rle == 0 {
+	if s.rle == 0 {
 		f.Seek(offset, 0)
 		px = make([]uint8, datasize)
 		binary.Read(f, binary.LittleEndian, px)
@@ -1326,7 +1404,7 @@ func (s *Sprite) readV2(f io.ReadSeeker, offset int64, datasize uint32) error {
 			// Do nothing, px is already in the expected format
 		case 24, 32:
 			isRaw = true
-			s.SetRaw(px, int32(s.Size[0]), int32(s.Size[1]), int32(s.coldepth))
+			s.setRawNow(px, int32(s.Size[0]), int32(s.Size[1]), int32(s.coldepth))
 		default:
 			return Error("Unknown color depth")
 		}
@@ -1382,14 +1460,14 @@ func (s *Sprite) readV2(f io.ReadSeeker, offset int64, datasize uint32) error {
 				rgba = image.NewRGBA(rect)
 				draw.Draw(rgba, rect, img, rect.Min, draw.Src)
 			}
-			s.SetRaw(rgba.Pix, int32(rect.Max.X-rect.Min.X), int32(rect.Max.Y-rect.Min.Y), 32)
+			s.setRawNow(rgba.Pix, int32(rect.Max.X-rect.Min.X), int32(rect.Max.Y-rect.Min.Y), 32)
 		default:
 			return Error("Unknown format")
 		}
 	}
 
 	if !isRaw {
-		s.SetPxl(px)
+		s.setPxlNow(px)
 	}
 	return nil
 }
@@ -1442,7 +1520,7 @@ func (s *Sprite) Draw(x, y, xscale, yscale float32, rxadd float32, rot Rotation,
 	}
 
 	rp := RenderParams{
-		tex:            s.Tex,
+		tex:            s.GetTex(),
 		paltex:         s.PalTex,
 		size:           s.Size,
 		x:              -x * sys.widthScale,
