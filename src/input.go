@@ -264,6 +264,37 @@ func GetJoystickState(kc KeyConfig) [14]bool {
 		}
 	}
 
+	// Directions: D-pad and left stick both count, whichever one is bound.
+	// DP_U(11)/LS_Y-(15), DP_D(12)/LS_Y+(18), DP_L(13)/LS_X-(16), DP_R(14)/LS_X+(17)
+	dirTwin := func(idx int) int {
+		switch idx {
+		case 11:
+			return 15
+		case 12:
+			return 18
+		case 13:
+			return 16
+		case 14:
+			return 17
+		case 15:
+			return 11
+		case 18:
+			return 12
+		case 16:
+			return 13
+		case 17:
+			return 14
+		}
+		return -1
+	}
+	for i, idx := range axisIndices[:4] {
+		if t := dirTwin(idx); t >= 15 {
+			out[i] = out[i] || handleAxisBtn(t)
+		} else if t >= 0 {
+			out[i] = out[i] || getBtn(t)
+		}
+	}
+
 	return out
 }
 

@@ -1,0 +1,30 @@
+name: odin-android
+on:
+  push:
+    branches: [ odin-dpad ]
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Android APK (Docker Compose)
+        shell: bash
+        env:
+          APP_VERSION: v1.0.0-odin-dpad
+          APP_BUILDTIME: "2026.10.01"
+          BUILD_ANDROID_APK: "1"
+          CI: "1"
+        run: |
+          chmod +x build/build_android.sh
+          ./build/build_android.sh
+          ls -lah bin/
+          test -f bin/ikemen-go.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ikemen-go-odin-dpad
+          path: |
+            bin/ikemen-go.apk
+            bin/libmain.so
