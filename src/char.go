@@ -4258,6 +4258,11 @@ func (c *Char) load(def string) error {
 	// Load SFF
 	if len(sprite) > 0 {
 		if err := LoadFile(&sprite, []string{gi.def, "", "data/"}, "", func(filename string) error {
+			// Drop the previous character's SFF before loading a different one so its textures can be freed
+			if gi.sff != nil && gi.sff.filename != filename {
+				gi.sff = nil
+				releaseUnusedTextures()
+			}
 			var err_sff error
 			gi.sff, err_sff = loadSff(filename, true, false, false) // loadSff uses OpenFile
 			return err_sff

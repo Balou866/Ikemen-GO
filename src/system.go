@@ -2344,6 +2344,15 @@ func (s *System) clearAllSound() {
 }
 
 // Remove the player's explods, projectiles and (optionally) helpers as well as stopping their sounds
+// GPU textures are only freed by finalizers, i.e. after a GC. Run one before
+// loading replacement assets so the previous ones are released first instead
+// of coexisting with the new ones (memory peak on low-RAM devices).
+func releaseUnusedTextures() {
+	runtime.GC()
+	// Let the finalizer goroutine queue gl.DeleteTextures ahead of the new uploads
+	time.Sleep(100 * time.Millisecond)
+}
+
 func (s *System) clearPlayerAssets(pn int, forceDestroy bool) {
 	if len(s.chars[pn]) > 0 {
 		// These aren't "assets" but we'll do it here
@@ -6450,6 +6459,10 @@ func (l *Loader) loadStage() bool {
 		// We're switching stages (or reloading): tear down background media in the old stage.
 		if sys.stage != nil && (sys.stage.def != def || !sys.stage.mainstage || sys.stage.reload) {
 			sys.stage.destroy()
+			// Drop the old stage before loading the new one so its textures can be freed
+			sys.stage = nil
+			sys.stageList = nil
+			releaseUnusedTextures()
 		}
 		sys.stageList = make(map[int32]*Stage)
 		sys.stageLoop = false
