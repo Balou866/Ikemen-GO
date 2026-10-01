@@ -1649,6 +1649,7 @@ func loadSff(filename string, char bool, isMainThread bool, isActPal bool) (*Sff
 
 	// Load sprites
 	spriteList := make([]*Sprite, int(s.header.NumberOfSprites))
+	throttle := true
 	var prev *Sprite
 	shofs := int64(s.header.FirstSpriteHeaderOffset)
 	for i := 0; i < len(spriteList); i++ {
@@ -1720,10 +1721,17 @@ func loadSff(filename string, char bool, isMainThread bool, isActPal bool) (*Sff
 				return nil, ErrLoadingCanceled
 			}
 			sys.runMainThreadTask()
-		} else {
-			// Don't decode far ahead of the main thread uploads: pending pixel
-			// buffers would pile up in RAM during loading.
+		} else if throttle && sys.loader.state == LS_Loading {
+			// Match loader goroutine: don't decode far ahead of the main thread
+			// uploads, pending pixel buffers would pile up in RAM. Not done for
+			// other callers, which may be running on the main thread itself.
+			deadline := time.Now().Add(time.Second)
 			for len(sys.mainThreadTask) > 16 && !loadingCanceled() {
+				if time.Now().After(deadline) {
+					// Nobody is draining the queue: stop throttling this file
+					throttle = false
+					break
+				}
 				time.Sleep(time.Millisecond)
 			}
 		}
