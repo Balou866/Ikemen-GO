@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -3020,6 +3021,8 @@ func systemScriptInit(l *lua.LState) {
 				sys.await(sys.gameRenderSpeed())
 			}
 			runtime.GC()
+			// Return freed loading buffers to the OS (also runs another GC)
+			debug.FreeOSMemory()
 			return nil
 		}
 

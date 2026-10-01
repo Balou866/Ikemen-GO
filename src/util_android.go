@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"unsafe"
 
 	findfont "github.com/flopp/go-findfont"
@@ -50,6 +51,9 @@ var (
 )
 
 func init() {
+	// GPU textures share the device RAM: keep the Go heap small so GC runs
+	// (and texture finalizers fire) well before the low memory killer does.
+	debug.SetMemoryLimit(512 << 20)
 }
 
 // Log writer implementation

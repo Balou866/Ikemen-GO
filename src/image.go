@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 	"unsafe"
 )
 
@@ -1719,6 +1720,12 @@ func loadSff(filename string, char bool, isMainThread bool, isActPal bool) (*Sff
 				return nil, ErrLoadingCanceled
 			}
 			sys.runMainThreadTask()
+		} else {
+			// Don't decode far ahead of the main thread uploads: pending pixel
+			// buffers would pile up in RAM during loading.
+			for len(sys.mainThreadTask) > 16 && !loadingCanceled() {
+				time.Sleep(time.Millisecond)
+			}
 		}
 	}
 	if loadingCanceled() {
